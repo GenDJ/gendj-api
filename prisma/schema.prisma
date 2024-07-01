@@ -1,0 +1,60 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String    @id
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  meta      Json?     @db.JsonB
+
+  stripeCustomerId String?
+
+  // paid for time as remaining in minutes
+  timeBalance Int     @default(5)
+  isSuperUser Boolean @default(false)
+
+  warps        Warp[]
+  savedPrompts Prompt[]
+}
+
+model Warp {
+  id         String    @id @default(cuid())
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+  podMeta    Json?     @db.JsonB
+  podId      String?   @unique
+  podStatus  String    @default("PENDING")
+  podReadyAt DateTime?
+  podEndedAt DateTime?
+
+  createdBy   User   @relation(fields: [createdById], references: [id])
+  createdById String
+}
+
+model Prompt {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  createdBy   User   @relation(fields: [createdById], references: [id])
+  createdById String
+
+  title    String
+  prompt   String
+  postText String?
+}
