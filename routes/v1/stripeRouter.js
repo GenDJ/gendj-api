@@ -8,6 +8,7 @@ const stripeRouter = express.Router({ mergeParams: true });
 
 const STRIPE_SECRET_KEY = await getSecret('STRIPE_SECRET_KEY');
 const STRIPE_ENDPOINT_SECRET = await getSecret('STRIPE_ENDPOINT_SECRET');
+const STRIPE_PRODUCT_ID = await getSecret('STRIPE_PRODUCT_ID');
 const stripe = new Stripe(STRIPE_SECRET_KEY);
 
 stripeRouter.post(
@@ -32,10 +33,11 @@ stripeRouter.post(
 
     // Handle the event
     switch (event.type) {
-      case 'payment_intent.succeeded':
-        const paymentIntentSucceeded = event.data.object;
-        console.log('paymentIntentSucceeded1212', paymentIntentSucceeded);
-        const { customer, amount } = paymentIntentSucceeded;
+      case 'checkout.session.completed':
+        const session = event.data.object;
+        console.log('Checkout session completed:', session);
+
+        const { customer, amount_total, metadata } = session;
 
         const user = await appPrismaClient.user.findFirst({
           where: {
@@ -47,15 +49,27 @@ stripeRouter.post(
           sendSendGridEmail({
             subject: 'Stripe payment error',
             force: true,
-            body: `stripe payment error: No user found for customer ${customer}`,
+            body: `Stripe payment error: No user found for customer ${customer}`,
           });
           console.error('No user found for customer', customer);
           response.send();
           return;
         }
 
+        console.log(
+          'metadata:',
+          JSON.stringify(metadata),
+          'comparing to:',
+          STRIPE_PRODUCT_ID,
+        );
+
+        if (metadata?.productId !== STRIPE_PRODUCT_ID) {
+          console.log('Invalid product ID', metadata?.productId);
+          return;
+        }
+
         // Convert amount to dollars and determine seconds to add
-        const amountInDollars = amount / 100; // Convert cents to dollars
+        const amountInDollars = amount_total / 100; // Convert cents to dollars
         let secondsToAdd = 0;
 
         switch (amountInDollars) {

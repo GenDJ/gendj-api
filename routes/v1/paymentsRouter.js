@@ -8,6 +8,7 @@ import { isEmail } from '#root/utils/dataUtils.js';
 import { CORS_ORIGIN } from '#root/utils/constants.js';
 
 const STRIPE_SECRET_KEY = await getSecret('STRIPE_SECRET_KEY');
+const STRIPE_PRODUCT_ID = await getSecret('STRIPE_PRODUCT_ID');
 
 const stripe = new Stripe(STRIPE_SECRET_KEY); // Step 2: Initialize Stripe
 
@@ -79,6 +80,9 @@ paymentsRouter.post(
         success_url: `${CORS_ORIGIN}/billing?status=success&amount=${amount}`,
         cancel_url: `${CORS_ORIGIN}/billing?status=cancelled`,
         customer: customerId,
+        metadata: {
+          productId: STRIPE_PRODUCT_ID,
+        },
       });
 
       console.log('session1212', session);

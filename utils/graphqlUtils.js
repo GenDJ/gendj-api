@@ -13,7 +13,8 @@ const runpodApiEndpoint = `https://api.runpod.io/graphql${
   runpodApiKey ? `?api_key=${runpodApiKey}` : ''
 }`;
 
-const READY_WEBHOOK_URL = await getSecret('READY_WEBHOOK_URL');
+const WEBHOOK_URL_BASE = await getSecret('WEBHOOK_URL_BASE');
+const READY_WEBHOOK_URL = `${WEBHOOK_URL_BASE}/v1/webhooks/podready`;
 const READY_WEBHOOK_SECRET_KEY = await getSecret('READY_WEBHOOK_SECRET_KEY');
 
 export async function selectBestGpuVolumeAndDataCenter() {
