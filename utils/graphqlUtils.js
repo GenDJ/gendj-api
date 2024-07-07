@@ -13,6 +13,9 @@ const runpodApiEndpoint = `https://api.runpod.io/graphql${
   runpodApiKey ? `?api_key=${runpodApiKey}` : ''
 }`;
 
+const READY_WEBHOOK_URL = await getSecret('READY_WEBHOOK_URL');
+const READY_WEBHOOK_SECRET_KEY = await getSecret('READY_WEBHOOK_SECRET_KEY');
+
 export async function selectBestGpuVolumeAndDataCenter() {
   const dataCentersAndAvailability =
     await getRunpodDataCentersAndGpuAvailability();
@@ -60,7 +63,7 @@ async function runGraphQLQuery({ query, variables = {} }) {
 
   const result = await response.json();
   // console.log('graphql resp1212');
-  console.dir(result, { depth: null, colors: true });
+  // console.dir(result, { depth: null, colors: true });
 
   if (result.errors) {
     console.error(
@@ -128,11 +131,65 @@ export async function createRunpodPod({ gpuType, volumeId, dataCenterId }) {
       networkVolumeId: volumeId,
       volumeInGb: 20,
       dataCenterId,
+      env: [
+        {
+          key: 'READY_WEBHOOK_URL',
+          value: READY_WEBHOOK_URL,
+        },
+        {
+          key: 'READY_WEBHOOK_SECRET_KEY',
+          value: READY_WEBHOOK_SECRET_KEY,
+        },
+      ],
     },
   };
 
   const data = await runGraphQLQuery({ query, variables });
   return data.podFindAndDeployOnDemand;
+}
+
+export async function getRunpodPod(podId) {
+  console.log('Getting RunPod pod:', podId);
+  const query = `
+  query GetPod($input: PodFilter) {
+    pod(input: $input) {
+      id
+      name
+      desiredStatus
+      imageName
+      machineId
+      gpuCount
+      costPerHr
+      createdAt
+      lastStartedAt
+      memoryInGb
+      vcpuCount
+      runtime {
+        ports {
+          ip
+          isIpPublic
+          privatePort
+          publicPort
+        }
+      }
+    }
+  }
+  `;
+
+  const variables = {
+    input: {
+      podId: podId,
+    },
+  };
+
+  try {
+    const data = await runGraphQLQuery({ query, variables });
+    console.log('Pod get result:', data);
+    return data.pod;
+  } catch (error) {
+    console.error('Error getting pod:', error);
+    throw error;
+  }
 }
 
 export async function endRunpodPod(podId) {
@@ -151,8 +208,9 @@ export async function endRunpodPod(podId) {
 
   try {
     const data = await runGraphQLQuery({ query, variables });
-    console.log('Pod end result:', data.podTerminate);
-    return data.podTerminate;
+    // data will always be null
+    console.log('Pod end result:', data);
+    return data;
   } catch (error) {
     console.error('Error ending pod:', error);
     throw error;
@@ -189,7 +247,7 @@ export async function getRunpodDataCentersAndGpuAvailability() {
 export async function planAndCreateRunpodPod() {
   const { gpuType, volumeId, dataCenterId } =
     await selectBestGpuVolumeAndDataCenter();
-  console.log('testSelectBestGpuVolumeAndDataCenter1212', gpuType, volumeId);
+  // console.log('testSelectBestGpuVolumeAndDataCenter1212', gpuType, volumeId);
   const podMeta = await createRunpodPod({ gpuType, volumeId, dataCenterId });
   return { ...podMeta, gpuType, volumeId, dataCenterId };
 }

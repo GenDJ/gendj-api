@@ -17,20 +17,44 @@ warpsRouter.post('/', ClerkExpressRequireAuth(), async (req, res) => {
   const { userId } = req.auth;
 
   try {
-    // Create a new pod with the selected GPU and volume
-    const podMeta = await planAndCreateRunpodPod();
-
-    const warp = await appPrismaClient.warp.create({
-      data: {
-        createdBy: { connect: { id: userId } },
-        podMeta,
-        podId: podMeta?.id,
+    // Check if the user already has a warp with podStatus "RUNNING" or "PENDING"
+    const existingWarp = await appPrismaClient.warp.findFirst({
+      where: {
+        createdBy: { id: userId },
+        podStatus: { in: ['RUNNING', 'PENDING'] },
       },
     });
 
-    return res.json({ sucess: true, entities: { warps: [warp] } });
+    if (existingWarp) {
+      // If a running or pending warp exists, return it
+      const estimatedUserTimeBalance = await calculateUserTimeBalanceAfterWarp({
+        userId,
+        warpId: existingWarp?.id,
+      });
+      return res.json({
+        success: true,
+        estimatedUserTimeBalance,
+        entities: { warps: [existingWarp] },
+      });
+    } else {
+      // If no running or pending warp exists, create a new one
+
+      // Create a new pod with the selected GPU and volume
+      const podMeta = await planAndCreateRunpodPod();
+
+      const warp = await appPrismaClient.warp.create({
+        data: {
+          createdBy: { connect: { id: userId } },
+          podMeta,
+          podId: podMeta?.id,
+          podStatus: 'PENDING', // Set initial podStatus to "PENDING"
+        },
+      });
+
+      return res.json({ success: true, entities: { warps: [warp] } });
+    }
   } catch (error) {
-    console.error('Error creating warp:', error);
+    console.error('Error creating or retrieving warp:', error);
     return res.status(500).json({ error: error.message });
   }
 });
@@ -53,6 +77,34 @@ warpsRouter.get('/', ClerkExpressRequireAuth(), async (req, res) => {
     return res.json({ sucess: true, entities: { warps } });
   } catch (error) {
     console.error('Error fetching warps:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// get all warps for the current user
+warpsRouter.get('/:warpId', ClerkExpressRequireAuth(), async (req, res) => {
+  const { userId } = req.auth;
+  const { warpId } = req.params;
+
+  if (!warpId) {
+    return res.status(400).json({ error: 'Warp ID is required' });
+  }
+
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+
+  try {
+    const warp = await appPrismaClient.warp.findFirst({
+      where: {
+        id: warpId,
+        createdBy: { id: userId },
+      },
+    });
+
+    return res.json({ sucess: true, entities: { warps: [warp] } });
+  } catch (error) {
+    console.error('Error fetching warp:', error);
     return res.status(500).json({ error: error.message });
   }
 });
@@ -81,20 +133,26 @@ warpsRouter.post(
         warpId,
       });
 
+      let updatedWarp = warp;
+
       if (estimatedUserTimeBalance < 0) {
         await endWarpAndUpdateUserTimeBalance({ warpId, userId, warp });
         return res.status(400).json({
           error: 'Insufficient balance to continue Warp',
         });
       } else {
-        await appPrismaClient.warp.update({
+        updatedWarp = await appPrismaClient.warp.update({
           where: { id: warpId },
           data: {
             updatedAt: new Date(),
           },
         });
 
-        return res.json({ sucess: true, estimatedUserTimeBalance });
+        return res.json({
+          sucess: true,
+          estimatedUserTimeBalance,
+          warps: [updatedWarp],
+        });
       }
     } catch (error) {
       console.error('Error updating warp heartbeat:', error);
@@ -102,6 +160,7 @@ warpsRouter.post(
     }
   },
 );
+
 warpsRouter.post(
   '/:warpId/end',
   ClerkExpressRequireAuth(),
@@ -133,10 +192,16 @@ warpsRouter.post(
 
       // Attempt to end the RunPod
       try {
-        await endWarpAndUpdateUserTimeBalance({ warpId, userId, warp });
-        res.status(200).json({ message: 'Warp ended successfully' });
+        const { warp: endedWarp, user: updatedUser } =
+          await endWarpAndUpdateUserTimeBalance({ warpId, userId, warp });
+        res
+          .status(200)
+          .json({ entities: { warps: [endedWarp], users: [updatedUser] } });
       } catch (endError) {
-        console.error(`Failed to end pod for Warp ${warpId}:`, endError);
+        console.error(
+          `Failed to end pod for Warp in router ${warpId}:`,
+          endError,
+        );
         res.status(500).json({ error: 'Failed to end Warp' });
       }
     } catch (error) {

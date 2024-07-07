@@ -17,77 +17,80 @@ paymentsRouter.post(
   '/create-checkout-session',
   ClerkExpressRequireAuth(),
   async (req, res) => {
-    throw new Error("unimplemented. Need to switch to hours checkout instead of amount")
-    // const { amount } = req.body;
-    // const { userId: clerkId } = req.auth;
-    // console.log('paymentb1212', amount);
-    // const clerkUser = await clerkClient.users.getUser(clerkId);
-    // if (!clerkUser) {
-    //   return res.status(400).send({ message: `user not found` });
-    // }
-    // const potentialEmail = clerkUser.emailAddresses?.[0]?.emailAddress;
+    const { amount, quantity } = req.body;
+    const { userId: clerkId } = req.auth;
+    console.log('paymentb1212', amount, quantity);
+    const clerkUser = await clerkClient.users.getUser(clerkId);
+    if (!clerkUser) {
+      return res.status(400).send({ message: `user not found` });
+    }
+    const potentialEmail = clerkUser.emailAddresses?.[0]?.emailAddress;
 
-    // let customerEmail = '';
-    // if (potentialEmail && isEmail(potentialEmail)) {
-    //   customerEmail = potentialEmail;
-    // }
+    let customerEmail = '';
+    if (potentialEmail && isEmail(potentialEmail)) {
+      customerEmail = potentialEmail;
+    }
 
-    // try {
-    //   const user = await appPrismaClient.user.findUnique({
-    //     where: {
-    //       id: clerkId,
-    //     },
-    //   });
+    try {
+      const user = await appPrismaClient.user.findUnique({
+        where: {
+          id: clerkId,
+        },
+      });
 
-    //   let customer;
-    //   let customerId = user?.stripeCustomerId;
-    //   if (!customerId) {
-    //     customer = await stripe.customers.create({
-    //       email: customerEmail, // Replace with the customer's email address
-    //       // You can add more details here if necessary (e.g., name, address)
-    //     });
+      let customer;
+      let customerId = user?.stripeCustomerId;
+      if (!customerId) {
+        customer = await stripe.customers.create({
+          email: customerEmail, // Replace with the customer's email address
+          // You can add more details here if necessary (e.g., name, address)
+        });
 
-    //     await appPrismaClient.user.update({
-    //       where: {
-    //         id: clerkId,
-    //       },
-    //       data: {
-    //         stripeCustomerId: customer.id,
-    //       },
-    //     });
+        await appPrismaClient.user.update({
+          where: {
+            id: clerkId,
+          },
+          data: {
+            stripeCustomerId: customer.id,
+          },
+        });
 
-    //     customerId = customer.id;
-    //   }
+        customerId = customer.id;
+      }
 
-    //   const session = await stripe.checkout.sessions.create({
-    //     payment_method_types: ['card'],
-    //     line_items: [
-    //       {
-    //         price_data: {
-    //           currency: 'usd',
-    //           product_data: {
-    //             name: 'Add Credit',
-    //           },
-    //           unit_amount: amount,
-    //         },
-    //         quantity: 1,
-    //       },
-    //     ],
-    //     mode: 'payment',
-    //     success_url: `${CORS_ORIGIN}/billing?status=success&amount=${amount}`,
-    //     cancel_url: `${CORS_ORIGIN}/billing?status=cancelled`,
-    //     customer: customerId,
-    //   });
-    //   console.log('session1212', session);
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [
+          {
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: `${quantity} Hour${quantity > 1 ? 's' : ''}`,
+                description: `Purchase ${quantity} hour${
+                  quantity > 1 ? 's' : ''
+                } of time`,
+              },
+              unit_amount: amount,
+            },
+            quantity: 1,
+          },
+        ],
+        mode: 'payment',
+        success_url: `${CORS_ORIGIN}/billing?status=success&amount=${amount}`,
+        cancel_url: `${CORS_ORIGIN}/billing?status=cancelled`,
+        customer: customerId,
+      });
 
-    //   return res.json({
-    //     success: true,
-    //     url: session.url,
-    //   });
-    // } catch (err) {
-    //   console.error('paymenterr1313', err);
-    //   return res.status(500).send({ message: `Payment Error` });
-    // }
+      console.log('session1212', session);
+
+      return res.json({
+        success: true,
+        url: session.url,
+      });
+    } catch (err) {
+      console.error('paymenterr1313', err);
+      return res.status(500).send({ message: `Payment Error` });
+    }
   },
 );
 

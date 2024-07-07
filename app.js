@@ -37,10 +37,16 @@ app.get('/alivecheck', function (req, res, next) {
 
 app.use('/v1', v1Router);
 
+console.log('running startup pod cleanup1212');
+checkWarpEntities().catch(error => {
+  console.error('Error checking Warp entities1:', error);
+});
+
 // Schedule the task to run every 5 minutes
 cron.schedule('*/5 * * * *', () => {
+  console.log('running cron pod cleanup1212');
   checkWarpEntities().catch(error => {
-    console.error('Error checking Warp entities:', error);
+    console.error('Error checking Warp entities2:', error);
   });
 });
 

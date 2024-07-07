@@ -4,6 +4,7 @@ import {
   selectBestGpuVolumeAndDataCenter,
   planAndCreateRunpodPod,
   endRunpodPod,
+  getRunpodPod,
 } from '#root/utils/graphqlUtils.js';
 
 const testSelectBestGpuVolumeAndDataCenter = async () => {
@@ -17,8 +18,14 @@ const testPlanAndCreatePod = async () => {
   console.log('testCreatePod1212', podMeta);
 };
 
+const testGetRunpodPod = async podId => {
+  const pods = await getRunpodPod(podId);
+  console.log('testGetRunpodPods1212', pods);
+};
+
 // await testSelectBestGpuVolumeAndDataCenter();
 // await testCreatePod();
-// await endRunpodPod('m2uzvmys0f9703');
+// await endRunpodPod('');
 // await testPlanAndCreatePod();
+// await testGetRunpodPod('');
 // getRunpodDataCenters();

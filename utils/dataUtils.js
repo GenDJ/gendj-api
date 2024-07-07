@@ -1,9 +1,9 @@
-function convertMillisecondsToMinutes(milliseconds) {
-  // Convert milliseconds to minutes
-  const minutes = milliseconds / 1000 / 60;
+function convertMillisecondsToSeconds(milliseconds) {
+  // Convert milliseconds to seconds
+  const seconds = milliseconds / 1000;
 
   // Return the result, optionally rounding it to a certain number of decimal places
-  return minutes;
+  return seconds;
 }
 
 const isEmail = potentialEmail => {
@@ -12,4 +12,4 @@ const isEmail = potentialEmail => {
   return re.test(String(potentialEmail).toLowerCase());
 };
 
-export { convertMillisecondsToMinutes, isEmail };
+export { convertMillisecondsToSeconds, isEmail };

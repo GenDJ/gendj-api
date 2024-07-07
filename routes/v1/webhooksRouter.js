@@ -3,6 +3,9 @@ import bodyParser from 'body-parser';
 import { Webhook } from 'svix';
 import { appPrismaClient } from '#root/utils/prismaUtils.js';
 import { sendSendGridEmail } from '#root/utils/emailUtils.js';
+import { getSecret } from '#root/utils/secretUtils.js';
+
+const READY_WEBHOOK_SECRET_KEY = await getSecret('READY_WEBHOOK_SECRET_KEY');
 const webhooksRouter = express.Router({ mergeParams: true });
 
 // this is for clerk
@@ -144,23 +147,50 @@ webhooksRouter.post(
   },
 );
 
+// Middleware to check for secret key
+const checkSecretKey = (req, res, next) => {
+  const secretKey = req.headers['x-secret-key'];
+  const expectedSecretKey = READY_WEBHOOK_SECRET_KEY; // Store this in your environment variables
+
+  if (!secretKey || secretKey !== expectedSecretKey) {
+    return res
+      .status(401)
+      .json({ message: 'Unauthorized: Invalid secret key' });
+  }
+  next();
+};
+
 // This is a webhook that is called when a runpod pod is ready
-webhooksRouter.post('/podready', async (req, res) => {
+webhooksRouter.post('/podready', checkSecretKey, async (req, res) => {
   const { podId } = req.body;
   console.log('podready1212', req.body);
 
-  appPrismaClient.warps.update({
-    where: {
-      podId,
-    },
-    data: {
-      podStatus: 'RUNNING',
-      podReadyAt: new Date(),
-    },
-  });
-  res.json({
-    message: 'success',
-  });
+  try {
+    const updatedWarp = await appPrismaClient.warp.update({
+      where: {
+        podId,
+      },
+      data: {
+        podStatus: 'RUNNING',
+        podReadyAt: new Date(),
+      },
+    });
+
+    const startupTimeInSeconds =
+      (new Date().getTime() - updatedWarp.createdAt?.getTime()) / 1000;
+
+    console.log(`Pod ${podId} startup time: ${startupTimeInSeconds} seconds`);
+
+    res.json({
+      message: 'success',
+    });
+  } catch (err) {
+    console.error('Error updating warp or calculating startup time:', err);
+    res.status(500).json({
+      message: 'error',
+      error: err.message,
+    });
+  }
 });
 
 export default webhooksRouter;

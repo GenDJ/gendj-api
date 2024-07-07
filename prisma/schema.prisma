@@ -22,8 +22,8 @@ model User {
 
   stripeCustomerId String?
 
-  // paid for time as remaining in minutes
-  timeBalance Int     @default(5)
+  // paid for time as remaining in seconds
+  timeBalance Int     @default(300)
   isSuperUser Boolean @default(false)
 
   warps        Warp[]

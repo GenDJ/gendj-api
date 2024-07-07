@@ -9,7 +9,14 @@ if (process.env.NODE_ENV === 'development') {
 
 const API_BASE = `${CORS_ORIGIN}/v1/`;
 
-export {
-  CORS_ORIGIN,
-  API_BASE,
+const POD_STATUS = {
+  CREATED: 'CREATED',
+  RUNNING: 'RUNNING',
+  RESTARTING: 'RESTARTING',
+  EXITED: 'EXITED',
+  PAUSED: 'PAUSED',
+  DEAD: 'DEAD',
+  TERMINATED: 'TERMINATED',
 };
+
+export { CORS_ORIGIN, API_BASE, POD_STATUS };

@@ -10,18 +10,10 @@ const STRIPE_SECRET_KEY = await getSecret('STRIPE_SECRET_KEY');
 const STRIPE_ENDPOINT_SECRET = await getSecret('STRIPE_ENDPOINT_SECRET');
 const stripe = new Stripe(STRIPE_SECRET_KEY);
 
-// Define the time packs and their corresponding hours
-const TIME_PACKS = {
-  pack_1hour: 60,
-  pack_10hours: 600,
-  pack_100hours: 6000,
-};
-
 stripeRouter.post(
   '/webhook',
   express.raw({ type: 'application/json' }),
   async (request, response) => {
-    throw new Error('unimplemented');
     const sig = request.headers['stripe-signature'];
 
     let event;
@@ -43,7 +35,7 @@ stripeRouter.post(
       case 'payment_intent.succeeded':
         const paymentIntentSucceeded = event.data.object;
         console.log('paymentIntentSucceeded1212', paymentIntentSucceeded);
-        const { customer, metadata } = paymentIntentSucceeded;
+        const { customer, amount } = paymentIntentSucceeded;
 
         const user = await appPrismaClient.user.findFirst({
           where: {
@@ -62,15 +54,25 @@ stripeRouter.post(
           return;
         }
 
-        // Get the time pack from metadata
-        const timePack = metadata.time_pack;
-        if (!TIME_PACKS[timePack]) {
-          console.error('Invalid time pack', timePack);
-          response.send();
-          return;
-        }
+        // Convert amount to dollars and determine seconds to add
+        const amountInDollars = amount / 100; // Convert cents to dollars
+        let secondsToAdd = 0;
 
-        const minutesToAdd = TIME_PACKS[timePack];
+        switch (amountInDollars) {
+          case 5:
+            secondsToAdd = 60 * 60;
+            break;
+          case 20:
+            secondsToAdd = 600 * 60;
+            break;
+          case 100:
+            secondsToAdd = 6000 * 60;
+            break;
+          default:
+            console.error('Invalid payment amount', amountInDollars);
+            response.send();
+            return;
+        }
 
         // Update user's time balance
         const updatedUser = await appPrismaClient.user.update({
@@ -78,12 +80,12 @@ stripeRouter.post(
             id: user.id,
           },
           data: {
-            timeBalance: user.timeBalance + minutesToAdd,
+            timeBalance: user.timeBalance + secondsToAdd,
           },
         });
 
         console.log(
-          `Updated user ${user.id} time balance to ${updatedUser.timeBalance} hours`,
+          `Updated user ${user.id} time balance to ${updatedUser.timeBalance} seconds`,
         );
         break;
       // ... handle other event types
