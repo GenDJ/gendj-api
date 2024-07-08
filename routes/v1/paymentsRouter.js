@@ -83,6 +83,7 @@ paymentsRouter.post(
         metadata: {
           productId: STRIPE_PRODUCT_ID,
         },
+        allow_promotion_codes: true, // Add this line
       });
 
       console.log('session1212', session);
