@@ -75,9 +75,9 @@ webhooksRouter.post(
 
     try {
       if (eventType === 'user.created') {
-        sendSendGridEmail({
-          subject: 'User Created',
-        });
+        // sendSendGridEmail({
+        //   subject: 'User Created',
+        // });
 
         const created = await appPrismaClient.$transaction(async tx => {
           let dbUser = await tx.user.findUnique({
@@ -109,9 +109,9 @@ webhooksRouter.post(
           return { user: dbUser };
         });
       } else if (eventType === 'user.deleted') {
-        sendSendGridEmail({
-          subject: 'User deleted',
-        });
+        // sendSendGridEmail({
+        //   subject: 'User deleted',
+        // });
         const existingUser = await appPrismaClient.user.findUnique({
           where: {
             id,
