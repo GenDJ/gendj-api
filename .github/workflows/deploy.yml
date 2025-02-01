@@ -1,0 +1,49 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy the API
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: deploy
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Load NVM
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+            
+            cd ~/apps/gendj-api
+            
+            # Pull latest changes
+            git pull origin main
+            
+            # Install dependencies
+            npm install
+            
+            # Generate Prisma client
+            npx prisma generate
+            
+            # Run migrations using local .env
+            npx prisma migrate deploy
+            
+            # Ensure PM2 is installed globally
+            npm install -g pm2
+            
+            # Check if the process exists, start if it doesn't, reload if it does
+            if pm2 describe gendj-api > /dev/null; then
+              pm2 reload gendj-api --update-env
+            else
+              pm2 start bin/www.js --name gendj-api
+              pm2 save
+            fi
