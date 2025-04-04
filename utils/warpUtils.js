@@ -180,9 +180,9 @@ export async function cancelWarpAndUpdateUserTimeBalance({
     console.log(`Cancellation request sent for Job ID: ${warp.jobId}`);
   } catch (error) {
     console.error(`Failed to send cancellation request for Job ${warp.jobId}:`, error);
-    // Decide how to proceed: maybe mark warp as 'CANCEL_FAILED' or just log and continue?
-    // For now, we'll log and proceed to update DB state as if cancelled locally.
-    // This prevents the user from being stuck if the API call fails temporarily.
+    // Re-throw the error to prevent marking the job as CANCELLED in the DB
+    // if the API call failed. Let the caller or the next cleanup run handle it.
+    throw new Error(`Failed to cancel Runpod job ${warp.jobId}: ${error.message}`);
   }
 
   // Use a transaction to update warp status and user balance
@@ -302,18 +302,19 @@ export async function syncWarpJobStatus(warpId) {
 
 /**
  * Finds and cancels warps that appear inactive or stuck.
- * - Warps in IN_QUEUE or other non-IN_PROGRESS states for too long.
- * - Warps in IN_PROGRESS state for longer than the maximum allowed duration.
+ * - Warps stuck in initial states (e.g., IN_QUEUE) for too long.
+ * - Warps in IN_PROGRESS state whose updatedAt timestamp hasn't been updated recently.
+ * This relies on some external mechanism updating the 'updatedAt' field for active warps.
  */
 export async function cleanupInactiveWarps() {
-  const stuckThresholdMinutes = 20; // e.g., Job shouldn't be pending/queued for more than 20 mins
-  const maxRuntimeMinutes = 120; // e.g., Max allowed runtime is 2 hours
+  const stuckThresholdMinutes = 20; // Max time to wait for a job to start
+  const inactivityThresholdMinutes = 15; // Max time since last update for an IN_PROGRESS job
 
   const now = new Date();
   const stuckTimeCutoff = new Date(now.getTime() - stuckThresholdMinutes * 60 * 1000);
-  const maxRuntimeCutoff = new Date(now.getTime() - maxRuntimeMinutes * 60 * 1000);
+  const inactivityCutoff = new Date(now.getTime() - inactivityThresholdMinutes * 60 * 1000);
 
-  const potentiallyStuckWarps = await appPrismaClient.warp.findMany({
+  const potentiallyInactiveWarps = await appPrismaClient.warp.findMany({
     where: {
       OR: [
         // Case 1: Stuck in a non-running state for too long (e.g., IN_QUEUE, PENDING)
@@ -322,10 +323,10 @@ export async function cleanupInactiveWarps() {
           createdAt: { lt: stuckTimeCutoff }, // Created long ago but never progressed
           deletedAt: null,
         },
-        // Case 2: Running for longer than the maximum allowed time
+        // Case 2: Running but inactive (updatedAt is old)
         {
           jobStatus: 'IN_PROGRESS',
-          jobStartedAt: { lt: maxRuntimeCutoff }, // Started long ago
+          updatedAt: { lt: inactivityCutoff }, // Not updated recently
           deletedAt: null,
         },
       ],
@@ -335,25 +336,25 @@ export async function cleanupInactiveWarps() {
       createdById: true,
       jobId: true,
       jobStatus: true,
-      // Select fields needed by cancelWarpAndUpdateUserTimeBalance if pre-fetching
       jobStartedAt: true,
+      updatedAt: true, // Include for logging/verification
     },
   });
 
-  if (potentiallyStuckWarps.length === 0) {
-    console.log('[Cleanup] No stuck or long-running warps found.');
+  if (potentiallyInactiveWarps.length === 0) {
+    console.log('[Cleanup] No stuck or inactive warps found.');
     return;
   }
 
-  console.log(`[Cleanup] Found ${potentiallyStuckWarps.length} potentially stuck/long-running warps. Attempting cancellation...`);
+  console.log(`[Cleanup] Found ${potentiallyInactiveWarps.length} potentially stuck/inactive warps. Attempting cancellation...`);
 
   let successCount = 0;
   let errorCount = 0;
 
-  for (const warp of potentiallyStuckWarps) {
-    console.log(`[Cleanup] Processing warp ${warp.id} (Job: ${warp.jobId}, Status: ${warp.jobStatus}) for user ${warp.createdById}`);
+  for (const warp of potentiallyInactiveWarps) {
+    console.log(`[Cleanup] Processing warp ${warp.id} (Job: ${warp.jobId}, Status: ${warp.jobStatus}, Last Updated: ${warp.updatedAt.toISOString()}) for user ${warp.createdById}`);
     try {
-      // Pass the fetched warp object to avoid redundant DB lookups inside the cancel function
+      // Pass the fetched warp object to avoid redundant DB lookups
       await cancelWarpAndUpdateUserTimeBalance({ 
           userId: warp.createdById, 
           warpId: warp.id, 
@@ -362,10 +363,8 @@ export async function cleanupInactiveWarps() {
       console.log(`[Cleanup] Successfully initiated cancellation for warp ${warp.id}.`);
       successCount++;
     } catch (error) {
-      // Log error but continue processing other warps
       console.error(`[Cleanup] Failed to cancel warp ${warp.id} (Job: ${warp.jobId}):`, error.message);
-       // Avoid double-counting if the error was just that it was already terminated
-      if (!error.message.includes('already in terminal state')) {
+       if (!error.message.includes('already in terminal state')) {
            errorCount++;
       }
     }

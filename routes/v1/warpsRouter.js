@@ -132,6 +132,89 @@ warpsRouter.get('/:warpId', ClerkExpressRequireAuth(), async (req, res) => {
   }
 });
 
+// Re-implemented Heartbeat endpoint for active warps
+warpsRouter.post(
+  '/:warpId/heartbeat',
+  ClerkExpressRequireAuth(),
+  async (req, res) => {
+    const { userId } = req.auth;
+    const { warpId } = req.params;
+
+    if (!warpId) {
+      return res.status(400).json({ error: 'Warp ID is required' });
+    }
+
+    try {
+      // Fetch the warp, ensuring it belongs to the user
+      let warp = await appPrismaClient.warp.findFirst({
+        where: {
+          id: warpId,
+          createdById: userId,
+        },
+        // Select fields needed for logic and response
+        select: { 
+            id: true, 
+            createdById: true, 
+            jobStatus: true, 
+            jobStartedAt: true, 
+            jobEndedAt: true 
+        }
+      });
+
+      if (!warp) {
+        return res.status(404).json({ error: 'Warp not found or access denied' });
+      }
+
+      // Only allow heartbeats for jobs actively in progress
+      if (warp.jobStatus !== 'IN_PROGRESS') {
+        return res.status(400).json({ error: `Warp is not IN_PROGRESS (status: ${warp.jobStatus}). Cannot heartbeat.` });
+      }
+
+      // Calculate estimated balance
+      const estimatedUserTimeBalance = await calculateUserTimeBalanceAfterWarp({
+        userId,
+        warpId,
+        warp, // Pass the fetched warp
+      });
+
+      let updatedWarp = warp;
+
+      // If balance is insufficient, end the warp
+      if (estimatedUserTimeBalance <= 0) {
+        console.log(`[Heartbeat] User ${userId} has insufficient balance for warp ${warpId}. Triggering cancellation.`);
+        const { warp: cancelledWarp, user: updatedUser } = await cancelWarpAndUpdateUserTimeBalance({ warpId, userId, warp });
+        return res.status(402).json({ // 402 Payment Required seems appropriate
+          error: 'Insufficient balance to continue Warp',
+          estimatedUserTimeBalance: 0, // Reflect that balance is depleted
+          entities: { warps: [cancelledWarp], users: [updatedUser] },
+        });
+      } else {
+        // If balance is sufficient, just update the timestamp
+        updatedWarp = await appPrismaClient.warp.update({
+          where: { id: warpId },
+          data: {
+            updatedAt: new Date(),
+          },
+        });
+
+        return res.json({
+          success: true,
+          estimatedUserTimeBalance, // Return the latest estimate
+          entities: { warps: [updatedWarp] },
+        });
+      }
+    } catch (error) {
+      console.error(`Error updating warp heartbeat for ${warpId}:`, error);
+      // Handle specific errors like cancellation failure if needed
+      if (error.message.includes('RunPod API') || error.message.includes('already in terminal state')) {
+          // Error occurred during cancellation attempt due to low balance
+          return res.status(500).json({ error: 'Failed to end warp due to low balance', details: error.message });
+      }
+      return res.status(500).json({ error: 'Internal server error during heartbeat' });
+    }
+  },
+);
+
 // End (cancel) a specific warp (serverless job)
 warpsRouter.post(
   '/:warpId/end',
