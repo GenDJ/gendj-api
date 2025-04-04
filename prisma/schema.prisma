@@ -36,7 +36,14 @@ model Warp {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  // RunPod Serverless fields
+  // --- Old Pod Fields (now optional for historical data) ---
+  podMeta    Json?     @db.JsonB
+  podId      String?   @unique // Still unique if present, but now optional
+  podStatus  String?   // Optional, maybe default needed? Let's keep optional for now.
+  podReadyAt DateTime?
+  podEndedAt DateTime?
+
+  // --- New RunPod Serverless fields (optional as they might not exist immediately) ---
   jobId           String?   @unique // ID from Runpod /run endpoint
   jobStatus       String?   // e.g., PENDING, IN_PROGRESS, COMPLETED, FAILED, CANCELLED
   jobRequestedAt  DateTime? // Timestamp when /run was called
