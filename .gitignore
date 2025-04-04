@@ -71,3 +71,7 @@ notes.txt
 .idea
 networkVolumes.js
 runpodConstants.js
+
+# macOS
+.DS_Store
+**/.DS_Store

@@ -8,7 +8,7 @@ import { CORS_ORIGIN } from '#root/utils/constants.js';
 import stripeRouter from '#root/routes/v1/stripeRouter.js';
 import v1Router from '#root/routes/v1/v1Router.js';
 import cron from 'node-cron';
-import { checkWarpEntities } from '#root/utils/warpUtils.js';
+import { cleanupInactiveWarps } from '#root/utils/warpUtils.js';
 
 var app = express();
 
@@ -37,17 +37,21 @@ app.get('/alivecheck', function (req, res, next) {
 
 app.use('/v1', v1Router);
 
-console.log('running startup pod cleanup1212');
-checkWarpEntities().catch(error => {
-  console.error('Error checking Warp entities1:', error);
-});
-
-// Schedule the task to run every 5 minutes
+// Schedule the cleanup task to run every 5 minutes
 cron.schedule('*/5 * * * *', () => {
-  console.log('running cron pod cleanup1212');
-  checkWarpEntities().catch(error => {
-    console.error('Error checking Warp entities2:', error);
+  console.log('[Cron] Running cleanup for inactive/stuck warps...');
+  cleanupInactiveWarps().catch(error => {
+    // Log the error but don't crash the server
+    console.error('[Cron] Error during cleanupInactiveWarps:', error);
   });
 });
+
+console.log('[Cron] Scheduled job cleanupInactiveWarps to run every 5 minutes.');
+
+// Optional: Run cleanup once on startup as well?
+// console.log('[Startup] Running initial cleanup for inactive/stuck warps...');
+// cleanupInactiveWarps().catch(error => {
+//   console.error('[Startup] Error during initial cleanupInactiveWarps:', error);
+// });
 
 export default app;

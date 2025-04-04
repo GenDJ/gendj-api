@@ -18,6 +18,115 @@ const READY_WEBHOOK_URL = `${WEBHOOK_URL_BASE}/v1/webhooks/podready`;
 const READY_WEBHOOK_SECRET_KEY = await getSecret('READY_WEBHOOK_SECRET_KEY');
 const OPENAI_API_KEY = await getSecret('OPENAI_API_KEY');
 
+// Required environment variables for RunPod Serverless
+const RUNPOD_ENDPOINT_ID = process.env.RUNPOD_ENDPOINT_ID;
+
+if (!RUNPOD_ENDPOINT_ID) {
+  console.error('Missing required environment variable: RUNPOD_ENDPOINT_ID');
+  // Optionally, throw an error or exit if this is critical at startup
+  // throw new Error('Missing required RunPod environment variable');
+}
+
+const RUNPOD_V2_API_BASE = `https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}`;
+
+async function runpodRequest(url, method = 'GET', body = null) {
+  const headers = {
+    'Authorization': `Bearer ${runpodApiKey}`,
+  };
+
+  const options = {
+    method,
+    headers,
+    timeout: 30000, // 30 seconds timeout
+  };
+
+  if (body) {
+    options.body = JSON.stringify(body);
+    headers['Content-Type'] = 'application/json';
+  }
+
+  try {
+    const response = await fetch(url, options);
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`RunPod API Error (${response.status}): ${errorBody}`);
+      throw new Error(`RunPod API request failed: ${response.statusText} - ${errorBody}`);
+    }
+
+    // Handle cases where Runpod might return empty body on success (like cancel)
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.indexOf("application/json") !== -1) {
+        return await response.json();
+    } else {
+        // Return status for non-json responses or empty bodies
+        return { status: response.status };
+    }
+
+  } catch (error) {
+    console.error(`Error during RunPod API request to ${url}:`, error);
+    // Re-throw the error to be handled by the caller
+    throw error;
+  }
+}
+
+/**
+ * Starts a new serverless job.
+ * @returns {Promise<object>} The job object containing the job ID.
+ * Example return: { "id": "job_id_string", "status": "IN_QUEUE" }
+ */
+export async function startRunpodServerlessJob() {
+  const url = `${RUNPOD_V2_API_BASE}/run`;
+  // Pass necessary environment variables to the worker if needed
+  const payload = {
+    input: {
+      // Add any initial input your serverless worker expects
+      // Example: passing API keys or config
+      env: {
+        // OPENAI_API_KEY: OPENAI_API_KEY, // Example
+      },
+    },
+    // Optionally add webhook URLs here if your endpoint supports them
+    // webhook: "YOUR_WEBHOOK_URL_HERE",
+  };
+
+  console.log(`Starting RunPod serverless job on endpoint ${RUNPOD_ENDPOINT_ID}...`);
+  const result = await runpodRequest(url, 'POST', payload);
+  console.log('RunPod serverless job started:', result);
+  return result; // Should contain { id: "...", status: "..." }
+}
+
+/**
+ * Gets the status of a specific serverless job.
+ * @param {string} jobId The ID of the job to check.
+ * @returns {Promise<object>} The job status object.
+ * Example return: { "status": "IN_PROGRESS", "workerId": "worker_id_string", ... }
+ * or { "status": "COMPLETED", "output": ..., "executionTime": ... }
+ */
+export async function getRunpodServerlessJobStatus(jobId) {
+  if (!jobId) throw new Error("jobId is required to get status.");
+  const url = `${RUNPOD_V2_API_BASE}/status/${jobId}`;
+  // console.log(`Checking status for job ${jobId}...`); // Optional: can be noisy
+  const result = await runpodRequest(url, 'GET');
+  // console.log(`Status for job ${jobId}:`, result.status); // Optional: can be noisy
+  return result;
+}
+
+/**
+ * Sends a request to cancel a specific serverless job.
+ * @param {string} jobId The ID of the job to cancel.
+ * @returns {Promise<object>} The cancellation result.
+ * Example return: { "status": "CANCELLED" } or similar confirmation from API.
+ */
+export async function cancelRunpodServerlessJob(jobId) {
+  if (!jobId) throw new Error("jobId is required to cancel.");
+  const url = `${RUNPOD_V2_API_BASE}/cancel/${jobId}`;
+  console.log(`Requesting cancellation for job ${jobId}...`);
+  const result = await runpodRequest(url, 'POST');
+  console.log(`Cancellation requested for job ${jobId}, result:`, result);
+  return result;
+}
+
 export async function selectBestGpuVolumeAndDataCenter() {
   const dataCentersAndAvailability =
     await getRunpodDataCentersAndGpuAvailability();
