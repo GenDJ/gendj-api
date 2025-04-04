@@ -145,50 +145,53 @@ webhooksRouter.post(
   },
 );
 
-// Middleware to check for secret key
-const checkSecretKey = (req, res, next) => {
-  const secretKey = req.headers['x-secret-key'];
-  const expectedSecretKey = READY_WEBHOOK_SECRET_KEY; // Store this in your environment variables
+// Middleware to check for secret key - Can likely be removed if no other webhooks use it
+// const checkSecretKey = (req, res, next) => {
+//   const secretKey = req.headers['x-secret-key'];
+//   const expectedSecretKey = READY_WEBHOOK_SECRET_KEY; // Store this in your environment variables
+//
+//   if (!secretKey || secretKey !== expectedSecretKey) {
+//     return res
+//       .status(401)
+//       .json({ message: 'Unauthorized: Invalid secret key' });
+//   }
+//   next();
+// };
 
-  if (!secretKey || secretKey !== expectedSecretKey) {
-    return res
-      .status(401)
-      .json({ message: 'Unauthorized: Invalid secret key' });
-  }
-  next();
-};
+// REMOVED: Webhook for /podready is no longer needed for serverless.
+// Runpod serverless status is typically checked via polling the /status endpoint
+// or potentially via different webhooks if RunPod offers them for serverless jobs.
 
-// This is a webhook that is called when a runpod pod is ready
-webhooksRouter.post('/podready', checkSecretKey, async (req, res) => {
-  const { podId } = req.body;
-  console.log('podready1212', req.body);
-
-  try {
-    const updatedWarp = await appPrismaClient.warp.update({
-      where: {
-        podId,
-      },
-      data: {
-        podStatus: 'RUNNING',
-        podReadyAt: new Date(),
-      },
-    });
-
-    const startupTimeInSeconds =
-      (new Date().getTime() - updatedWarp.createdAt?.getTime()) / 1000;
-
-    console.log(`Pod ${podId} startup time: ${startupTimeInSeconds} seconds`);
-
-    res.json({
-      message: 'success',
-    });
-  } catch (err) {
-    console.error('Error updating warp or calculating startup time:', err);
-    res.status(500).json({
-      message: 'error',
-      error: err.message,
-    });
-  }
-});
+// webhooksRouter.post('/podready', checkSecretKey, async (req, res) => {
+//   const { podId } = req.body;
+//   console.log('podready1212', req.body);
+//
+//   try {
+//     const updatedWarp = await appPrismaClient.warp.update({
+//       where: {
+//         podId, // This field no longer exists
+//       },
+//       data: {
+//         podStatus: 'RUNNING', // This status is deprecated
+//         podReadyAt: new Date(), // This field no longer exists
+//       },
+//     });
+//
+//     const startupTimeInSeconds =
+//       (new Date().getTime() - updatedWarp.createdAt?.getTime()) / 1000;
+//
+//     console.log(`Pod ${podId} startup time: ${startupTimeInSeconds} seconds`);
+//
+//     res.json({
+//       message: 'success',
+//     });
+//   } catch (err) {
+//     console.error('Error updating warp or calculating startup time:', err);
+//     res.status(500).json({
+//       message: 'error',
+//       error: err.message,
+//     });
+//   }
+// });
 
 export default webhooksRouter;

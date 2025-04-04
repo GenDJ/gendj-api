@@ -31,16 +31,20 @@ model User {
 }
 
 model Warp {
-  id         String    @id @default(cuid())
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  deletedAt  DateTime?
-  podMeta    Json?     @db.JsonB
-  podId      String?   @unique
-  podStatus  String    @default("PENDING")
-  podReadyAt DateTime?
-  podEndedAt DateTime?
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now()) // Represents when the warp *request* was made
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
+  // RunPod Serverless fields
+  jobId           String?   @unique // ID from Runpod /run endpoint
+  jobStatus       String?   // e.g., PENDING, IN_PROGRESS, COMPLETED, FAILED, CANCELLED
+  jobRequestedAt  DateTime? // Timestamp when /run was called
+  jobStartedAt    DateTime? // Timestamp when worker started (from status or webhook)
+  jobEndedAt      DateTime? // Timestamp when job completed/failed/cancelled
+  workerId        String?   // Worker ID assigned to the job
+
+  // Keep relation to user
   createdBy   User   @relation(fields: [createdById], references: [id])
   createdById String
 }
