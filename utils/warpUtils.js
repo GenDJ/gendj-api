@@ -385,7 +385,31 @@ export async function syncWarpJobStatus(warpId) {
     return finalWarp; // Return the latest warp data (either original or updated)
   } catch (error) {
     console.error(`Error syncing status for Warp ${warpId} (Job ${warp.jobId}):`, error);
-    // Optionally update warp status to UNKNOWN or ERROR_SYNCING
+
+    // Check if it's a 404 error from Runpod for a job already terminal in our DB
+    const isNotFoundError = error.message && error.message.includes('Not Found') && error.message.includes('request does not exist');
+    const isDbTerminal = terminalStates.includes(warp.jobStatus);
+
+    if (isNotFoundError && isDbTerminal) {
+      console.log(`[SyncWarp] Runpod API returned 404 for DB terminal warp ${warpId} (Status: ${warp.jobStatus}). Assuming purged and marking as confirmed.`);
+      try {
+        const confirmedWarp = await appPrismaClient.warp.update({
+          where: { id: warpId },
+          data: { runpodConfirmedTerminal: true },
+          select: { // Return the full object consistent with successful sync
+            id: true, jobId: true, jobStatus: true, jobStartedAt: true,
+            jobEndedAt: true, workerId: true, createdById: true, updatedAt: true, createdAt: true,
+            runpodConfirmedTerminal: true
+          }
+        });
+        return confirmedWarp; // Return the updated warp object
+      } catch (updateError) {
+        console.error(`[SyncWarp] Failed to mark warp ${warpId} as confirmed after 404 error:`, updateError);
+        // Fall through to return null if update fails
+      }
+    }
+
+    // Optionally update warp status to UNKNOWN or ERROR_SYNCING for other errors
     return null;
   }
 }
