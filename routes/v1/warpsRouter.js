@@ -177,11 +177,13 @@ warpsRouter.post(
         warp, // Pass the fetched warp
       });
 
+      console.log(`[Heartbeat] Calculated estimated time balance for user ${userId}, warp ${warpId}: ${estimatedUserTimeBalance.toFixed(2)}s`);
+
       let updatedWarp = warp;
 
       // If balance is insufficient, end the warp
       if (estimatedUserTimeBalance <= 0) {
-        console.log(`[Heartbeat] User ${userId} has insufficient balance for warp ${warpId}. Triggering cancellation.`);
+        console.log(`[Heartbeat] User ${userId} has insufficient balance (${estimatedUserTimeBalance.toFixed(2)}s) for warp ${warpId}. Triggering cancellation.`);
         const { warp: cancelledWarp, user: updatedUser } = await cancelWarpAndUpdateUserTimeBalance({ warpId, userId, warp });
         return res.status(402).json({ // 402 Payment Required seems appropriate
           error: 'Insufficient balance to continue Warp',
@@ -190,12 +192,14 @@ warpsRouter.post(
         });
       } else {
         // If balance is sufficient, just update the timestamp
+        console.log(`[Heartbeat] User ${userId} has sufficient balance for warp ${warpId}. Updating updatedAt timestamp.`);
         updatedWarp = await appPrismaClient.warp.update({
           where: { id: warpId },
           data: {
             updatedAt: new Date(),
           },
         });
+        console.log(`[Heartbeat] Successfully updated updatedAt for warp ${warpId}.`);
 
         return res.json({
           success: true,
@@ -204,7 +208,7 @@ warpsRouter.post(
         });
       }
     } catch (error) {
-      console.error(`Error updating warp heartbeat for ${warpId}:`, error);
+      console.error(`[Heartbeat Error] Error processing heartbeat for warp ${warpId}:`, error);
       // Handle specific errors like cancellation failure if needed
       if (error.message.includes('RunPod API') || error.message.includes('already in terminal state')) {
           // Error occurred during cancellation attempt due to low balance
