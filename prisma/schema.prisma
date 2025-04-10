@@ -49,6 +49,7 @@ model Warp {
   jobRequestedAt  DateTime? // Timestamp when /run was called
   jobStartedAt    DateTime? // Timestamp when worker started (from status or webhook)
   jobEndedAt      DateTime? // Timestamp when job completed/failed/cancelled
+  runpodConfirmedTerminal Boolean @default(false) // Flag indicating if terminal status was confirmed by Runpod API
   workerId        String?   // Worker ID assigned to the job
 
   // Keep relation to user

@@ -246,7 +246,19 @@ export async function cancelWarpAndUpdateUserTimeBalance({
 export async function syncWarpJobStatus(warpId) {
   const warp = await appPrismaClient.warp.findUnique({
     where: { id: warpId },
-    select: { id: true, jobId: true, jobStatus: true },
+    // Select all fields needed for comparison and potential updates
+    select: {
+      id: true,
+      jobId: true,
+      jobStatus: true,
+      jobStartedAt: true,
+      jobEndedAt: true,
+      workerId: true,
+      createdById: true, // Needed for balance update later
+      runpodConfirmedTerminal: true, // Added field
+      updatedAt: true, // Needed for return value consistency
+      createdAt: true, // Needed for return value consistency
+    },
   });
 
   if (!warp || !warp.jobId) {
@@ -254,55 +266,123 @@ export async function syncWarpJobStatus(warpId) {
     return null;
   }
 
-  // Avoid syncing if already in a final state
-  const terminalStates = ['COMPLETED', 'FAILED', 'CANCELLED'];
-  if (terminalStates.includes(warp.jobStatus)) {
-    // console.log(`Warp ${warpId} is already in terminal state ${warp.jobStatus}. Skipping status sync.`);
-    return warp;
+  const terminalStates = ['COMPLETED', 'FAILED', 'CANCELLED', 'ENDED'];
+
+  // If already terminal in DB AND confirmed by Runpod, skip API sync.
+  if (terminalStates.includes(warp.jobStatus) && warp.runpodConfirmedTerminal) {
+    // console.log(`Warp ${warpId} is already in a confirmed terminal state ${warp.jobStatus}. Skipping API sync.`);
+    return warp; // Return the existing warp data
   }
 
   try {
+    console.log(`[SyncWarp] Calling getRunpodServerlessJobStatus for job ${warp.jobId}...`);
     const jobStatusResult = await getRunpodServerlessJobStatus(warp.jobId);
+    console.log(`[SyncWarp] Raw response for job ${warp.jobId}:`, JSON.stringify(jobStatusResult)); // Less verbose logging
+
     const { status, workerId, delayTime, executionTime } = jobStatusResult;
 
-    const updateData = {
-      jobStatus: status,
-      workerId: workerId || warp.workerId, // Keep existing workerId if new status doesn't provide one
-    };
+    let needsUpdate = false;
+    const updateData = {};
 
-    // Set jobStartedAt when status moves to IN_PROGRESS (if not already set)
+    // Check if status changed
+    if (status !== warp.jobStatus) {
+      updateData.jobStatus = status;
+      needsUpdate = true;
+      console.log(`[SyncWarp] Status change detected for ${warp.id}: ${warp.jobStatus} -> ${status}`);
+      // If the new status is terminal, mark it as confirmed
+      if (terminalStates.includes(status)) {
+        updateData.runpodConfirmedTerminal = true;
+         console.log(`[SyncWarp] Marking warp ${warp.id} as runpodConfirmedTerminal.`);
+      }
+    }
+
+    // Check if workerId changed (and is not null/undefined)
+    const newWorkerId = workerId || warp.workerId; // Use new one if available
+    if (newWorkerId !== warp.workerId) {
+      updateData.workerId = newWorkerId;
+      needsUpdate = true;
+       console.log(`[SyncWarp] WorkerId change detected for ${warp.id}: ${warp.workerId} -> ${newWorkerId}`);
+    }
+
+    // Check if jobStartedAt needs setting
+    let estimatedStartedAt = null;
     if (status === 'IN_PROGRESS' && !warp.jobStartedAt) {
-       updateData.jobStartedAt = new Date(Date.now() - (delayTime || 0) * 1000); // Estimate start time based on delayTime
-       console.log(`Setting jobStartedAt for Warp ${warpId} (Job ${warp.jobId}) based on IN_PROGRESS status.`);
+       estimatedStartedAt = new Date(Date.now() - (delayTime || 0) * 1000);
+       updateData.jobStartedAt = estimatedStartedAt;
+       needsUpdate = true;
+       console.log(`[SyncWarp] Setting jobStartedAt for Warp ${warpId} (Job ${warp.jobId}) based on IN_PROGRESS status.`);
     }
 
-    // Set jobEndedAt when status moves to a terminal state (if not already set)
+    // Check if jobEndedAt needs setting
+    let estimatedEndedAt = null;
     if (terminalStates.includes(status) && !warp.jobEndedAt) {
-       updateData.jobEndedAt = new Date(Date.now() - (delayTime || 0) * 1000 + (executionTime || 0) * 1000); // Estimate end time
-       console.log(`Setting jobEndedAt for Warp ${warpId} (Job ${warp.jobId}) based on ${status} status.`);
+       // Use the estimatedStartedAt if calculated in this run, otherwise fetch it from warp
+       const start = estimatedStartedAt || warp.jobStartedAt;
+       if (start) { // Only calculate end time if we have a start time
+           estimatedEndedAt = new Date(start.getTime() + (executionTime || 0) * 1000);
+           // Ensure end time is not before start time
+           if (estimatedEndedAt < start) {
+               console.warn(`[SyncWarp] Calculated end time ${estimatedEndedAt.toISOString()} is before start time ${start.toISOString()} for job ${warp.jobId}. Using current time as fallback.`);
+               estimatedEndedAt = new Date(); // Fallback to current time
+           }
+           updateData.jobEndedAt = estimatedEndedAt;
+           needsUpdate = true;
+           console.log(`[SyncWarp] Setting jobEndedAt for Warp ${warpId} (Job ${warp.jobId}) based on ${status} status.`);
+           // Also mark as confirmed if setting end time based on terminal status
+           if (!updateData.runpodConfirmedTerminal) {
+             updateData.runpodConfirmedTerminal = true;
+              console.log(`[SyncWarp] Marking warp ${warp.id} as runpodConfirmedTerminal (triggered by setting jobEndedAt).`);
+           }
+       } else {
+            console.warn(`[SyncWarp] Cannot set jobEndedAt for job ${warp.jobId} in status ${status} because jobStartedAt is missing.`);
+            // If we couldn't set jobEndedAt but status is terminal, still mark confirmed if status changed
+            if (terminalStates.includes(status) && status !== warp.jobStatus && !updateData.runpodConfirmedTerminal) {
+               updateData.runpodConfirmedTerminal = true;
+               needsUpdate = true; // Need to update to set the flag
+               console.log(`[SyncWarp] Marking warp ${warp.id} as runpodConfirmedTerminal (status is terminal, but endedAt couldn't be set).`);
+            }
+       }
     }
 
+    let finalWarp = warp; // Start with the initially fetched warp
 
-    const updatedWarp = await appPrismaClient.warp.update({
-      where: { id: warpId },
-      data: updateData,
-    });
-
-    // If the job just completed/failed, finalize the user's balance
-    if (terminalStates.includes(status) && updatedWarp.jobEndedAt && updatedWarp.jobStartedAt) {
-      console.log(`Job ${warp.jobId} reached terminal state ${status}. Finalizing time balance for user ${updatedWarp.createdById}.`);
-      await appPrismaClient.$transaction(async (tx) => {
-          await updateUserTimeBalanceForEndedWarp({
-              tx,
-              userId: updatedWarp.createdById,
-              warp: updatedWarp, // Pass the fully updated warp object
-          });
+    if (needsUpdate) {
+      console.log(`[SyncWarp] Updating warp ${warpId} in DB. Changes:`, Object.keys(updateData));
+      finalWarp = await appPrismaClient.warp.update({
+        where: { id: warpId },
+        data: updateData,
+        // Return the full object after update including the new flag
+        select: {
+            id: true, jobId: true, jobStatus: true, jobStartedAt: true,
+            jobEndedAt: true, workerId: true, createdById: true, updatedAt: true, createdAt: true,
+            runpodConfirmedTerminal: true
+        }
       });
+
+      // If the job just reached a terminal state *in this update* AND was confirmed,
+      // finalize the user's balance. Check finalWarp.runpodConfirmedTerminal for safety.
+      if (finalWarp.runpodConfirmedTerminal && terminalStates.includes(finalWarp.jobStatus) && finalWarp.jobEndedAt && finalWarp.jobStartedAt && status !== warp.jobStatus) {
+        console.log(`[SyncWarp] Job ${finalWarp.jobId} reached confirmed terminal state ${finalWarp.jobStatus}. Finalizing time balance for user ${finalWarp.createdById}.`);
+        try {
+            await appPrismaClient.$transaction(async (tx) => {
+                await updateUserTimeBalanceForEndedWarp({
+                    tx,
+                    userId: finalWarp.createdById,
+                    warp: finalWarp, // Pass the fully updated warp object
+                });
+            });
+             console.log(`[SyncWarp] Successfully finalized balance for user ${finalWarp.createdById} for job ${finalWarp.jobId}.`);
+        } catch (balanceError) {
+             console.error(`[SyncWarp] Error finalizing balance for user ${finalWarp.createdById} for job ${finalWarp.jobId}:`, balanceError);
+             // Decide how to handle this - maybe retry later? For now, log and continue.
+        }
+      }
+    } else {
+      // console.log(`[SyncWarp] No relevant changes detected for warp ${warpId} (Status: ${status}). Skipping DB update.`);
     }
 
-
-    // console.log(`Synced status for Warp ${warpId} (Job ${warp.jobId}): ${status}`);
-    return updatedWarp;
+    // console.log(`Synced status for Warp ${warpId} (Job ${warp.jobId}): ${finalWarp.jobStatus}`);
+    return finalWarp; // Return the latest warp data (either original or updated)
   } catch (error) {
     console.error(`Error syncing status for Warp ${warpId} (Job ${warp.jobId}):`, error);
     // Optionally update warp status to UNKNOWN or ERROR_SYNCING
@@ -320,24 +400,21 @@ export async function syncWarpJobStatus(warpId) {
  */
 export async function cleanupInactiveWarps() {
   const stuckThresholdMinutes = 20; // Max time to wait for a job to start
-  // const maxRuntimeMinutes = 60; // Max total runtime for any IN_PROGRESS job before cleanup cancels it - REMOVED
-  const inactivityThresholdMinutes = 15; // Max time since last update (heartbeat) for an IN_PROGRESS job
-  const recheckTerminalMinutes = 30; // Check terminal (CANCELLED/FAILED) warps older than this, in case Runpod didn't stop them
+  const inactivityThresholdMinutes = 5; // Max time since last *actual change* for an IN_PROGRESS job
+  // Removed recheckTerminalMinutes as we now rely on the runpodConfirmedTerminal flag
 
   const now = new Date();
   const stuckTimeCutoff = new Date(now.getTime() - stuckThresholdMinutes * 60 * 1000);
-  // const maxRuntimeCutoff = new Date(now.getTime() - maxRuntimeMinutes * 60 * 1000); - REMOVED
   const inactivityCutoff = new Date(now.getTime() - inactivityThresholdMinutes * 60 * 1000);
-  const recheckTerminalCutoff = new Date(now.getTime() - recheckTerminalMinutes * 60 * 1000);
+  // Removed recheckTerminalCutoff
 
-  // Define states we expect to be final vs potentially active
-  const trulyTerminalStates = ['COMPLETED', 'ENDED']; // States we generally trust once set
-  const activeStates = ['IN_QUEUE', 'PENDING', 'IN_PROGRESS', 'PAUSED']; // States that should eventually become terminal
-  const potentiallyStuckTerminalStates = ['CANCELLED', 'FAILED']; // States we *requested* but might need re-checking
+  // Define states
+  const terminalStates = ['COMPLETED', 'FAILED', 'CANCELLED', 'ENDED'];
+  const activeStates = ['IN_QUEUE', 'PENDING', 'IN_PROGRESS', 'PAUSED'];
 
-  console.log('[Cleanup] Starting inactive/stuck/discrepancy warp check...');
+  console.log('[Cleanup] Starting inactive/stuck/unconfirmed warp check...');
 
-  // Fetch warps that are potentially active OR could be stuck terminal jobs
+  // Fetch warps that are potentially active OR terminal but not yet confirmed by Runpod sync
   const warpsToCheck = await appPrismaClient.warp.findMany({
     where: {
       deletedAt: null,
@@ -346,8 +423,8 @@ export async function cleanupInactiveWarps() {
         { jobStatus: { in: activeStates } }, // Actively supposed to be running/queued
         { jobStatus: null }, // Might have failed before status set
         {
-          jobStatus: { in: potentiallyStuckTerminalStates },
-          updatedAt: { lt: recheckTerminalCutoff }, // Check CANCELLED/FAILED jobs that haven't been updated recently
+          jobStatus: { in: terminalStates }, // Is terminal in our DB...
+          runpodConfirmedTerminal: false,     // ...but we haven't confirmed it via API yet
         },
       ],
     },
@@ -359,15 +436,16 @@ export async function cleanupInactiveWarps() {
       jobStartedAt: true,
       createdAt: true,
       updatedAt: true,
+      runpodConfirmedTerminal: true, // Need this for logic after sync
     },
   });
 
   if (warpsToCheck.length === 0) {
-    console.log('[Cleanup] No warps found needing status check.');
+    console.log('[Cleanup] No warps found needing status check or confirmation.');
     return;
   }
 
-  console.log(`[Cleanup] Found ${warpsToCheck.length} warps to check. Syncing status and evaluating...`);
+  console.log(`[Cleanup] Found ${warpsToCheck.length} warps to check/confirm. Syncing status and evaluating...`);
 
   let cancelAttemptCount = 0;
   let errorCount = 0;
@@ -376,75 +454,80 @@ export async function cleanupInactiveWarps() {
   for (const initialWarp of warpsToCheck) {
     let needsCancellation = false;
     let reason = '';
-    const initialDbStatus = initialWarp.jobStatus; // Store the DB status before sync
+    const initialDbStatus = initialWarp.jobStatus;
+    const wasConfirmedBeforeSync = initialWarp.runpodConfirmedTerminal;
 
     try {
-      console.log(`[Cleanup] Syncing status for warp ${initialWarp.id} (Job: ${initialWarp.jobId}, DB Status: ${initialDbStatus || 'NULL'})`);
+      console.log(`[Cleanup] Syncing status for warp ${initialWarp.id} (Job: ${initialWarp.jobId}, DB Status: ${initialDbStatus || 'NULL'}, Confirmed: ${wasConfirmedBeforeSync})`);
+      // syncWarpJobStatus now returns the latest warp data, including runpodConfirmedTerminal
       const syncedWarp = await syncWarpJobStatus(initialWarp.id);
 
       if (!syncedWarp) {
         console.warn(`[Cleanup] Failed to sync status for warp ${initialWarp.id}. Skipping further checks for this warp.`);
-        // Consider if sync failure itself indicates a problem - potentially increment error count?
         skippedCount++;
         continue;
       }
 
-      const currentRunpodStatus = syncedWarp.jobStatus;
-
-      // If Runpod status is now definitively terminal, we're good. Sync handled balance.
-      if (trulyTerminalStates.includes(currentRunpodStatus) || potentiallyStuckTerminalStates.includes(currentRunpodStatus)) {
-        console.log(`[Cleanup] Warp ${syncedWarp.id} has terminal status '${currentRunpodStatus}' on Runpod. Skipping cancellation check.`);
+      // If the sync confirmed the job is terminal, we're done with this one.
+      if (syncedWarp.runpodConfirmedTerminal) {
+        console.log(`[Cleanup] Warp ${syncedWarp.id} is now in confirmed terminal state '${syncedWarp.jobStatus}'. Skipping cancellation check.`);
         skippedCount++;
         continue;
       }
 
-      // --- If Runpod status is STILL ACTIVE ---
-      console.log(`[Cleanup] Warp ${syncedWarp.id} has active status '${currentRunpodStatus}' on Runpod. Evaluating cleanup rules...`);
+      // --- If Runpod status is STILL ACTIVE (or couldn't be confirmed as terminal by sync) ---
+      const currentRunpodStatus = syncedWarp.jobStatus; // Status after sync attempt
+      console.log(`[Cleanup] Warp ${syncedWarp.id} has non-confirmed status '${currentRunpodStatus}' after sync. Evaluating cleanup rules...`);
 
       // Check 1: Stuck in initial states
-      if (['IN_QUEUE', 'PENDING'].includes(currentRunpodStatus) && syncedWarp.createdAt < stuckTimeCutoff) {
+      if (activeStates.slice(0, 2).includes(currentRunpodStatus) && syncedWarp.createdAt < stuckTimeCutoff) { // IN_QUEUE, PENDING
         needsCancellation = true;
         reason = `Stuck in ${currentRunpodStatus} since ${syncedWarp.createdAt.toISOString()}`;
       }
-      // Check 2: Running but inactive (no recent heartbeat)
+      // Check 2: Running but inactive (updatedAt didn't change recently)
+      // We rely on syncWarpJobStatus *not* updating the record if status didn't change.
       else if (currentRunpodStatus === 'IN_PROGRESS' && syncedWarp.updatedAt < inactivityCutoff) {
         needsCancellation = true;
-        reason = `Inactive IN_PROGRESS (last update: ${syncedWarp.updatedAt.toISOString()})`;
+        reason = `Inactive IN_PROGRESS (last change detected at: ${syncedWarp.updatedAt.toISOString()})`;
       }
-      // Check 3: Discrepancy - DB thought it was terminal, but Runpod says it's active
-      else if (potentiallyStuckTerminalStates.includes(initialDbStatus) && activeStates.includes(currentRunpodStatus)) {
+      // Check 3: Discrepancy - DB thought it was terminal (but unconfirmed), sync shows it's active
+      else if (terminalStates.includes(initialDbStatus) && !wasConfirmedBeforeSync && activeStates.includes(currentRunpodStatus)) {
           needsCancellation = true;
-          reason = `Discrepancy: DB status was '${initialDbStatus}', but Runpod status is '${currentRunpodStatus}'`;
+          reason = `Discrepancy: DB status was unconfirmed '${initialDbStatus}', Runpod sync shows active '${currentRunpodStatus}'`;
       }
-
 
       if (needsCancellation) {
         console.log(`[Cleanup] Triggering cancellation for warp ${syncedWarp.id} (User: ${syncedWarp.createdById}, Job: ${syncedWarp.jobId}). Reason: ${reason}`);
-        await cancelWarpAndUpdateUserTimeBalance({
-          userId: syncedWarp.createdById,
-          warpId: syncedWarp.id,
-          warp: syncedWarp, // Pass the synced warp object
-        });
-        console.log(`[Cleanup] Successfully initiated cancellation attempt for warp ${syncedWarp.id}.`);
-        cancelAttemptCount++;
+        try {
+            await cancelWarpAndUpdateUserTimeBalance({
+              userId: syncedWarp.createdById,
+              warpId: syncedWarp.id,
+              warp: syncedWarp, // Pass the synced warp object
+            });
+            console.log(`[Cleanup] Successfully initiated cancellation attempt for warp ${syncedWarp.id}.`);
+            cancelAttemptCount++;
+        } catch(cancelError) {
+             console.error(`[Cleanup] Error during cancellation attempt for warp ${syncedWarp.id}:`, cancelError.message);
+             // If cancellation failed because it's already terminal (race condition), treat as skipped
+             if (cancelError.message && cancelError.message.includes('already in terminal state')) {
+                 console.log(`[Cleanup] Cancellation failed because warp ${syncedWarp.id} reached terminal state concurrently.`);
+                 // Ensure it gets marked confirmed on the next run if needed
+                 skippedCount++;
+             } else {
+                 errorCount++; // Count other cancellation errors
+             }
+        }
       } else {
-         console.log(`[Cleanup] Warp ${syncedWarp.id} (Runpod Status: ${currentRunpodStatus}) does not meet cancellation criteria this cycle.`);
+         console.log(`[Cleanup] Warp ${syncedWarp.id} (Status: ${currentRunpodStatus}) does not meet cancellation criteria this cycle.`);
          skippedCount++;
       }
 
     } catch (error) {
-      console.error(`[Cleanup] Error processing warp ${initialWarp.id} (Job: ${initialWarp.jobId}):`, error.message);
-      // Don't count errors for jobs already terminal, as cancellation will fail expectedly.
-      if (!error.message.includes('already in terminal state')) {
-        errorCount++;
-      } else {
-        // If cancellation failed because it's now terminal, it's effectively handled.
-        console.log(`[Cleanup] Cancellation attempt skipped for warp ${initialWarp.id}, now detected as terminal.`);
-        skippedCount++;
-        if (needsCancellation) cancelAttemptCount--; // Correct the count if we tried to cancel but it was already done
-      }
+      // Catch errors from syncWarpJobStatus itself (e.g., API call failure)
+      console.error(`[Cleanup] Error during sync/processing for warp ${initialWarp.id} (Job: ${initialWarp.jobId}):`, error.message);
+      errorCount++;
     }
   }
 
-  console.log(`[Cleanup] Finished. Cancellation Attempts: ${cancelAttemptCount}, Skipped/Healthy: ${skippedCount}, Errors: ${errorCount}`);
+  console.log(`[Cleanup] Finished. Cancellation Attempts: ${cancelAttemptCount}, Skipped/Confirmed: ${skippedCount}, Errors: ${errorCount}`);
 }

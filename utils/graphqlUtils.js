@@ -107,7 +107,7 @@ export async function getRunpodServerlessJobStatus(jobId) {
   if (!jobId) throw new Error("jobId is required to get status.");
   const url = `${RUNPOD_V2_API_BASE}/status/${jobId}`;
   // console.log(`Checking status for job ${jobId}...`); // Optional: can be noisy
-  const result = await runpodRequest(url, 'GET');
+  const result = await runpodRequest(url, 'POST');
   // console.log(`Status for job ${jobId}:`, result.status); // Optional: can be noisy
   return result;
 }
