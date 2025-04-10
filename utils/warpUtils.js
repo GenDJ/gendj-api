@@ -434,7 +434,7 @@ export async function syncWarpJobStatus(warpId) {
  */
 export async function cleanupInactiveWarps() {
   const stuckThresholdMinutes = 20; // Max time to wait for a job to start
-  const inactivityThresholdMinutes = 5; // Max time since last *actual change* for an IN_PROGRESS job
+  const inactivityThresholdMinutes = 2; // Max time since last *actual change* for an IN_PROGRESS job
   // Removed recheckTerminalMinutes as we now rely on the runpodConfirmedTerminal flag
 
   const now = new Date();
