@@ -344,6 +344,16 @@ export async function syncWarpJobStatus(warpId) {
        }
     }
 
+    // Final check: If status is terminal, flag is false, but nothing else triggered an update,
+    // we still need to update to set the flag true.
+    if (terminalStates.includes(status) && !warp.runpodConfirmedTerminal && !needsUpdate) {
+        console.log(`[SyncWarp] Forcing update for warp ${warp.id} to set runpodConfirmedTerminal=true (Status: ${status})`);
+        updateData.runpodConfirmedTerminal = true;
+        // Ensure jobStatus is included if not already, maintaining consistency
+        if (!updateData.jobStatus) updateData.jobStatus = status;
+        needsUpdate = true;
+    }
+
     let finalWarp = warp; // Start with the initially fetched warp
 
     if (needsUpdate) {
