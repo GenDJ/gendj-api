@@ -307,7 +307,7 @@ export async function syncWarpJobStatus(warpId) {
     // Check if jobStartedAt needs setting
     let estimatedStartedAt = null;
     if (status === 'IN_PROGRESS' && !warp.jobStartedAt) {
-       estimatedStartedAt = new Date(Date.now() - (delayTime || 0) * 1000);
+       estimatedStartedAt = new Date(Date.now() - (delayTime || 0));
        updateData.jobStartedAt = estimatedStartedAt;
        needsUpdate = true;
        console.log(`[SyncWarp] Setting jobStartedAt for Warp ${warpId} (Job ${warp.jobId}) based on IN_PROGRESS status.`);
