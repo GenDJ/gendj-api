@@ -79,7 +79,7 @@ stripeRouter.post(
           case 20:
             secondsToAdd = 600 * 60;
             break;
-          case 100:
+          case 150:
             secondsToAdd = 6000 * 60;
             break;
           default:
