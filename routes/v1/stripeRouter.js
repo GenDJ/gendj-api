@@ -94,7 +94,8 @@ stripeRouter.post(
             id: user.id,
           },
           data: {
-            timeBalance: user.timeBalance + secondsToAdd,
+            // Ensure balance doesn't start below 0 for the addition
+            timeBalance: Math.max(0, user.timeBalance) + secondsToAdd,
           },
         });
 
